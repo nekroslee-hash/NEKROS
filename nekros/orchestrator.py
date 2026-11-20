@@ -4,18 +4,23 @@ from __future__ import annotations
 import httpx
 from .config import settings
 
+FREE_ROUTER = "openrouter/free"
+
 
 class ProviderNotConfigured(RuntimeError):
     pass
 
 
 def choose_free_model(prompt: str, models: list[str]) -> str:
-    """Choose a configured free model using lightweight task hints."""
-    allowed = [model.strip() for model in models if model.strip().endswith(":free")]
-    if not allowed:
+    """Choose a configured free model, or OpenRouter's free-only router."""
+    supplied = [model.strip() for model in models if model.strip()]
+    allowed = [model for model in supplied if model.endswith(":free") or model == FREE_ROUTER]
+    if supplied and not allowed:
         raise ProviderNotConfigured(
-            "هیچ مدل رایگان مجازی تنظیم نشده است. شناسه مدل رایگان را در NEKROS_FREE_MODELS قرار دهید."
+            "هیچ مدل رایگان مجازی تنظیم نشده است. فقط مدل‌های دارای پسوند :free یا openrouter/free مجازند."
         )
+    if not allowed:
+        return FREE_ROUTER
 
     text = prompt.casefold()
     code_hints = ("python", "javascript", "html", "css", "کد", "برنامه‌نویسی", "خطا", "debug")
@@ -29,14 +34,23 @@ def choose_free_model(prompt: str, models: list[str]) -> str:
 
 
 class AIOrchestrator:
-    """Routes requests only to explicitly configured free OpenRouter models."""
+    """Routes requests only to explicitly free models or OpenRouter's free router."""
 
     def __init__(self):
         self.base_url = settings.openrouter_base_url.rstrip("/")
 
+    @staticmethod
+    def _models() -> list[str]:
+        configured = [
+            item.strip()
+            for item in settings.free_models.split(",")
+            if item.strip().endswith(":free")
+        ]
+        return configured or [FREE_ROUTER]
+
     def status(self) -> dict:
         models = self._models()
-        configured = bool(settings.openrouter_api_key and models)
+        configured = bool(settings.openrouter_api_key)
         return {
             "mode": "automatic",
             "provider": "openrouter",
@@ -44,20 +58,11 @@ class AIOrchestrator:
             "free_only": True,
             "available_models": models,
             "message": (
-                "مسیریاب آماده است."
+                "اتصال آماده است؛ مسیریاب OpenRouter فقط از مدل‌های رایگان استفاده می‌کند."
                 if configured
-                else "برای فعال‌شدن پاسخ هوشمند، کلید OpenRouter و حداقل یک مدل با پسوند :free لازم است."
+                else "برای فعال‌شدن پاسخ هوشمند، کلید API رایگان OpenRouter را در تنظیمات سرور قرار دهید."
             ),
         }
-
-    @staticmethod
-    def _models() -> list[str]:
-        # Paid model IDs are discarded before they reach routing or status output.
-        return [
-            item.strip()
-            for item in settings.free_models.split(",")
-            if item.strip().endswith(":free")
-        ]
 
     async def respond(self, prompt: str) -> str:
         prompt = prompt.strip()
@@ -65,7 +70,7 @@ class AIOrchestrator:
             raise ValueError("Prompt cannot be empty")
         if not settings.openrouter_api_key:
             raise ProviderNotConfigured(
-                "اتصال هوش مصنوعی هنوز تنظیم نشده است؛ NEKROS برای استفاده رایگان به کلید API و مدل رایگان نیاز دارد."
+                "اتصال هوش مصنوعی هنوز تنظیم نشده است؛ کلید API سرور OpenRouter لازم است."
             )
         model = choose_free_model(prompt, self._models())
         url = f"{self.base_url}/chat/completions"
@@ -84,7 +89,10 @@ class AIOrchestrator:
             response.raise_for_status()
             data = response.json()
         try:
-            return data["choices"][0]["message"]["content"]
+            content = data["choices"][0]["message"]["content"]
+            if not isinstance(content, str) or not content.strip():
+                raise TypeError("Empty or non-text response")
+            return content
         except (KeyError, IndexError, TypeError) as exc:
             raise RuntimeError("پاسخ دریافتی از ارائه‌دهنده معتبر نیست.") from exc
 
