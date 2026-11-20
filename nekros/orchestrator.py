@@ -52,7 +52,12 @@ class AIOrchestrator:
 
     @staticmethod
     def _models() -> list[str]:
-        return [item.strip() for item in settings.free_models.split(",") if item.strip()]
+        # Paid model IDs are discarded before they reach routing or status output.
+        return [
+            item.strip()
+            for item in settings.free_models.split(",")
+            if item.strip().endswith(":free")
+        ]
 
     async def respond(self, prompt: str) -> str:
         prompt = prompt.strip()
