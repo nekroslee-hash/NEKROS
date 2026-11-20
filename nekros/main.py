@@ -1,5 +1,5 @@
 from pathlib import Path
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -9,7 +9,7 @@ from .orchestrator import orchestrator
 from .security import require_token
 
 ROOT = Path(__file__).resolve().parent.parent
-app = FastAPI(title="NEKROS", version="0.1.0")
+app = FastAPI(title="NEKROS", version="0.2.0")
 app.mount("/static", StaticFiles(directory=ROOT / "web"), name="static")
 
 @app.on_event("startup")
@@ -18,6 +18,9 @@ def startup():
 
 class TextBody(BaseModel):
     content: str = Field(min_length=1, max_length=10000)
+    category: str | None = Field(default=None, max_length=40)
+    importance: int = Field(default=3, ge=1, le=5)
+    tags: str = Field(default="", max_length=300)
 
 class TaskBody(BaseModel):
     title: str = Field(min_length=1, max_length=300)
@@ -35,16 +38,23 @@ def home():
 
 @app.get("/api/health")
 def health():
-    return {"status": "online", "name": "NEKROS", "version": "0.1.0"}
+    return {"status": "online", "name": "NEKROS", "version": "0.2.0", "memory": "offline-local"}
 
 @app.get("/api/memories", dependencies=[Depends(require_token)])
 def get_memories():
     return memory.list_memories()
 
+@app.get("/api/memories/search", dependencies=[Depends(require_token)])
+def find_memories(q: str = Query(min_length=1, max_length=300), limit: int = Query(default=10, ge=1, le=50)):
+    try:
+        return {"query": q, "results": memory.search_memories(q, limit)}
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+
 @app.post("/api/memories", dependencies=[Depends(require_token)])
 def save_memory(body: TextBody):
     try:
-        return memory.add_memory(body.content)
+        return memory.add_memory(body.content, body.category, body.importance, body.tags)
     except ValueError as exc:
         raise HTTPException(400, str(exc))
 
